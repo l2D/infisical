@@ -24,6 +24,7 @@ import {
   Tooltip
 } from "@app/components/v2";
 import { InfisicalSecretInput } from "@app/components/v2/InfisicalSecretInput";
+import { Base64Toggle } from "@app/components/v2/SecretInput/Base64Toggle";
 import {
   ProjectPermissionActions,
   ProjectPermissionSub,
@@ -41,6 +42,11 @@ import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { twMerge } from "tailwind-merge";
 
 import { ProjectPermissionSecretActions } from "@app/context/ProjectPermissionContext/types";
+import {
+  hasBase64Encoding,
+  SECRET_METADATA_ENCODING_BASE64,
+  SECRET_METADATA_ENCODING_KEY
+} from "@app/lib/fn/base64";
 import { hasSecretReadValueOrDescribePermission } from "@app/lib/fn/permission";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faEyeSlash, faKey, faRotate, faWarning } from "@fortawesome/free-solid-svg-icons";
@@ -58,6 +64,7 @@ import {
 } from "./SecretListView.utils";
 import { CollapsibleSecretImports } from "./CollapsibleSecretImports";
 import { useBatchModeActions } from "../../SecretMainPage.store";
+import { useBase64Toggle } from "./useBase64Toggle";
 
 export const HIDDEN_SECRET_VALUE = "*************************";
 export const HIDDEN_SECRET_VALUE_API_MASK = "<hidden-by-infisical>";
@@ -145,6 +152,12 @@ export const SecretItem = memo(
 
     const isLoadingSecretValue = canFetchSecretValue && isPendingSecretValueData;
     const hasFetchedSecretValue = !canFetchSecretValue || Boolean(secretValueData);
+
+    const b64 = useBase64Toggle({
+      rawValue: originalSecret.value ?? secretValueData?.value,
+      secretMetadata: originalSecret.secretMetadata,
+      isVisible: Boolean(isVisible) || isFieldFocused
+    });
 
     const secret = {
       ...originalSecret,
@@ -243,6 +256,23 @@ export const SecretItem = memo(
       overrideAction === SecretActionType.Created || overrideAction === SecretActionType.Modified;
     const hasTagsApplied = Boolean(fields.length);
 
+    const buildModifiedSecret = useCallback(
+      (data: TFormSchema) => {
+        const modifiedSecret = { ...secret, ...data };
+        if (b64.isDecoding && !b64.isMarkedBase64) {
+          const currentMetadata = secret.secretMetadata || [];
+          if (!hasBase64Encoding(currentMetadata)) {
+            modifiedSecret.secretMetadata = [
+              ...currentMetadata,
+              { key: SECRET_METADATA_ENCODING_KEY, value: SECRET_METADATA_ENCODING_BASE64 }
+            ];
+          }
+        }
+        return modifiedSecret;
+      },
+      [secret, b64.isDecoding, b64.isMarkedBase64]
+    );
+
     const autoSaveChanges = useCallback(
       async (data: TFormSchema) => {
         if (isAutoSavingRef.current) return;
@@ -255,7 +285,7 @@ export const SecretItem = memo(
 
         isAutoSavingRef.current = true;
         try {
-          await onSaveSecret(secret, { ...secret, ...data }, () => {
+          await onSaveSecret(secret, buildModifiedSecret(data), () => {
             reset();
           });
         } catch (error) {
@@ -264,7 +294,15 @@ export const SecretItem = memo(
           isAutoSavingRef.current = false;
         }
       },
-      [secret, onSaveSecret, importedBy, reset]
+      [
+        secret,
+        onSaveSecret,
+        importedBy,
+        reset,
+        b64.isDecoding,
+        b64.isMarkedBase64,
+        buildModifiedSecret
+      ]
     );
 
     const formValues = watch();
@@ -362,11 +400,11 @@ export const SecretItem = memo(
         handlePopUpOpen("editSecret", data);
         return;
       }
-      await onSaveSecret(secret, { ...secret, ...data }, () => reset());
+      await onSaveSecret(secret, buildModifiedSecret(data), () => reset());
     };
 
     const handleEditSecret = async (data: TFormSchema) => {
-      await onSaveSecret(secret, { ...secret, ...data }, () => reset());
+      await onSaveSecret(secret, buildModifiedSecret(data), () => reset());
       handlePopUpClose("editSecret");
     };
 
@@ -395,11 +433,16 @@ export const SecretItem = memo(
     };
 
     const copyTokenToClipboard = async () => {
+      if (b64.isDecoding && b64.displayValue !== undefined) {
+        await navigator.clipboard.writeText(b64.displayValue);
+        setIsSecValueCopied.on();
+        return;
+      }
+
       const data = await fetchValue();
       if (!data) return;
 
       navigator.clipboard.writeText(data.valueOverride ?? data.value);
-
       setIsSecValueCopied.on();
     };
 
@@ -548,6 +591,22 @@ export const SecretItem = memo(
                       environment={environment}
                       secretPath={secretPath}
                       {...field}
+                      value={
+                        b64.isDecoding && b64.displayValue !== undefined
+                          ? b64.displayValue
+                          : field.value
+                      }
+                      onChange={(e) => {
+                        if (b64.isDecoding) {
+                          const newDecodedValue =
+                            typeof e === "string"
+                              ? e
+                              : (e as React.ChangeEvent<HTMLTextAreaElement>).target.value;
+                          field.onChange(b64.toStorageValue(newDecodedValue));
+                        } else {
+                          field.onChange(e);
+                        }
+                      }}
                       onFocus={() => {
                         setIsFieldFocused.on();
                       }}
@@ -568,6 +627,19 @@ export const SecretItem = memo(
                   key="actions"
                   className="flex h-full shrink-0 self-start transition-all group-hover:gap-x-2"
                 >
+                  {b64.toggleState && (
+                    <Base64Toggle
+                      state={b64.toggleState}
+                      onClick={() => {
+                        if (b64.toggleState === "suggested") {
+                          b64.enableDecoding();
+                          return;
+                        }
+                        b64.handleToggle();
+                      }}
+                      warningMessage={b64.warningMessage}
+                    />
+                  )}
                   <IconButton
                     isDisabled={secret.secretValueHidden}
                     ariaLabel="copy-value"
