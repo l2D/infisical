@@ -43,6 +43,7 @@ import {
   Tooltip
 } from "@app/components/v2";
 import { InfisicalSecretInput } from "@app/components/v2/InfisicalSecretInput";
+import { Base64Toggle } from "@app/components/v2/SecretInput/Base64Toggle";
 import {
   ProjectPermissionActions,
   ProjectPermissionSub,
@@ -62,12 +63,18 @@ import {
 } from "@app/hooks/api/dashboard/queries";
 import { useGetSecretAccessList } from "@app/hooks/api/secrets/queries";
 import { SecretV3RawSanitized, WsTag } from "@app/hooks/api/types";
+import {
+  hasBase64Encoding,
+  SECRET_METADATA_ENCODING_BASE64,
+  SECRET_METADATA_ENCODING_KEY
+} from "@app/lib/fn/base64";
 import { hasSecretReadValueOrDescribePermission } from "@app/lib/fn/permission";
 import { camelCaseToSpaces } from "@app/lib/fn/string";
 
 import { HIDDEN_SECRET_VALUE } from "./SecretItem";
 import { formSchema, SecretActionType, TFormSchema } from "./SecretListView.utils";
 import { SecretVersionItem } from "./SecretVersionItem";
+import { useBase64Toggle } from "./useBase64Toggle";
 
 type Props = {
   isOpen?: boolean;
@@ -135,6 +142,12 @@ export const SecretDetailSidebar = ({
     valueOverride: originalSecret?.valueOverride ?? secretValueData?.valueOverride
   };
 
+  const b64 = useBase64Toggle({
+    rawValue: secret.value,
+    secretMetadata: secret.secretMetadata,
+    isVisible: isFieldFocused
+  });
+
   const { permission } = useProjectPermission();
 
   const canEditSecretValue = permission.can(
@@ -191,18 +204,22 @@ export const SecretDetailSidebar = ({
     disabled: !secret
   });
 
-  // Update value fields when secret value is fetched, but only if user hasn't modified them
+  // Update value fields when secret value is fetched, but only if user hasn't modified them.
+  // Use reset (not setValue) so defaultValues update too — keeps isDirty = false.
   useEffect(() => {
     if (secretValueData) {
-      // Only update if the field hasn't been touched/modified by the user
+      const updates: Record<string, unknown> = {};
       if (!getFieldState("value").isDirty && secretValueData.value !== undefined) {
-        setValue("value", secretValueData.value, { shouldDirty: false });
+        updates.value = secretValueData.value;
       }
       if (!getFieldState("valueOverride").isDirty && secretValueData.valueOverride !== undefined) {
-        setValue("valueOverride", secretValueData.valueOverride, { shouldDirty: false });
+        updates.valueOverride = secretValueData.valueOverride;
+      }
+      if (Object.keys(updates).length > 0) {
+        reset({ ...getValues(), ...updates });
       }
     }
-  }, [secretValueData, setValue, getFieldState]);
+  }, [secretValueData]);
 
   // Reset form when a different secret is opened
   useEffect(() => {
@@ -435,6 +452,15 @@ export const SecretDetailSidebar = ({
                       label="Value"
                     >
                       <div className="flex items-start gap-x-2">
+                        {b64.toggleState && (
+                          <div className="mt-2">
+                            <Base64Toggle
+                              state={b64.toggleState}
+                              onClick={b64.handleToggle}
+                              warningMessage={b64.warningMessage}
+                            />
+                          </div>
+                        )}
                         <InfisicalSecretInput
                           isReadOnly={
                             isReadOnly ||
@@ -450,6 +476,22 @@ export const SecretDetailSidebar = ({
                           isDisabled={isOverridden}
                           containerClassName="text-bunker-300 w-full hover:border-primary-400/50 border border-mineshaft-600 bg-mineshaft-900 px-2 py-1.5"
                           {...field}
+                          value={
+                            b64.isDecoding && b64.displayValue !== undefined
+                              ? b64.displayValue
+                              : field.value
+                          }
+                          onChange={(e) => {
+                            if (b64.isDecoding) {
+                              const newDecodedValue =
+                                typeof e === "string"
+                                  ? e
+                                  : (e as React.ChangeEvent<HTMLTextAreaElement>).target.value;
+                              field.onChange(b64.toStorageValue(newDecodedValue));
+                            } else {
+                              field.onChange(e);
+                            }
+                          }}
                           autoFocus={false}
                           onFocus={() => setIsFieldFocused.on()}
                           onBlur={() => {
@@ -530,6 +572,62 @@ export const SecretDetailSidebar = ({
                   </ProjectPermissionCan>
                 )}
               />
+            </div>
+            <div className="rounded-md border border-mineshaft-600 bg-mineshaft-900 p-4">
+              <ProjectPermissionCan
+                I={ProjectPermissionActions.Edit}
+                a={subject(ProjectPermissionSub.Secrets, {
+                  environment,
+                  secretPath,
+                  secretName: secretKey,
+                  secretTags: selectTagSlugs
+                })}
+              >
+                {(isAllowed) => (
+                  <div className="flex items-center justify-between">
+                    <span className="w-max text-sm text-mineshaft-300">
+                      Base64 encoded
+                      <Tooltip
+                        content="When enabled, the secret value will be displayed decoded from base64. Edits will be re-encoded on save."
+                        className="z-100"
+                      >
+                        <FontAwesomeIcon icon={faCircleQuestion} className="ml-2" />
+                      </Tooltip>
+                    </span>
+                    <Switch
+                      id="base64-encoding-option"
+                      onCheckedChange={(isChecked) => {
+                        const currentMetadata = getValues("secretMetadata") || [];
+                        if (isChecked) {
+                          if (!hasBase64Encoding(currentMetadata)) {
+                            setValue(
+                              "secretMetadata",
+                              [
+                                ...currentMetadata,
+                                {
+                                  key: SECRET_METADATA_ENCODING_KEY,
+                                  value: SECRET_METADATA_ENCODING_BASE64,
+                                  isEncrypted: false
+                                }
+                              ],
+                              { shouldDirty: true }
+                            );
+                          }
+                        } else {
+                          setValue(
+                            "secretMetadata",
+                            currentMetadata.filter((m) => m.key !== SECRET_METADATA_ENCODING_KEY),
+                            { shouldDirty: true }
+                          );
+                        }
+                      }}
+                      isChecked={hasBase64Encoding(watch("secretMetadata"))}
+                      isDisabled={!isAllowed}
+                      className="items-center justify-between"
+                    />
+                  </div>
+                )}
+              </ProjectPermissionCan>
             </div>
             <div className="flex flex-col rounded-md border border-mineshaft-600 bg-mineshaft-900 p-4 px-0 pb-0">
               <div
