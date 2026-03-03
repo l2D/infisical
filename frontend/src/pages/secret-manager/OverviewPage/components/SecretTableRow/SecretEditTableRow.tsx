@@ -34,6 +34,7 @@ import {
 } from "@app/components/secrets/SecretReferenceDetails";
 import { DeleteActionModal, Input, Modal, ModalContent } from "@app/components/v2";
 import { InfisicalSecretInput } from "@app/components/v2/InfisicalSecretInput";
+import { Base64Toggle } from "@app/components/v2/SecretInput/Base64Toggle";
 import {
   Badge,
   DropdownMenu,
@@ -69,10 +70,17 @@ import { useGetSecretValue } from "@app/hooks/api/dashboard/queries";
 import { Reminder } from "@app/hooks/api/reminders/types";
 import { PendingAction } from "@app/hooks/api/secretFolders/types";
 import { ProjectEnv, SecretType, SecretV3RawSanitized, WsTag } from "@app/hooks/api/types";
+import {
+  hasBase64Encoding,
+  safeBase64Decode,
+  SECRET_METADATA_ENCODING_BASE64,
+  SECRET_METADATA_ENCODING_KEY
+} from "@app/lib/fn/base64";
 import { hasSecretReadValueOrDescribePermission } from "@app/lib/fn/permission";
 import { AddShareSecretModal } from "@app/pages/organization/SecretSharingPage/components/ShareSecret/AddShareSecretModal";
 import { CollapsibleSecretImports } from "@app/pages/secret-manager/SecretDashboardPage/components/SecretListView/CollapsibleSecretImports";
 import { HIDDEN_SECRET_VALUE } from "@app/pages/secret-manager/SecretDashboardPage/components/SecretListView/SecretItem";
+import { useBase64Toggle } from "@app/pages/secret-manager/SecretDashboardPage/components/SecretListView/useBase64Toggle";
 import { useBatchStoreApi } from "@app/pages/secret-manager/SecretDashboardPage/SecretMainPage.store";
 
 import { SecretAccessInsights } from "./SecretAccessInsights";
@@ -380,6 +388,30 @@ export const SecretEditTableRow = ({
   const watchedMetadata = watch("metadata") as
     | { key: string; value: string; isEncrypted: boolean }[]
     | undefined;
+
+  const b64 = useBase64Toggle({
+    rawValue: (watchedValue as string) ?? undefined,
+    secretMetadata,
+    isVisible: Boolean(isVisible) || isFieldActive
+  });
+
+  const getMetadataWithEncoding = useCallback(
+    (existing?: { key: string; value: string; isEncrypted?: boolean }[]) => {
+      if (!b64.isDecoding || b64.isMarkedBase64) return existing;
+      const current = existing || secretMetadata || [];
+      if (hasBase64Encoding(current)) return existing;
+      return [
+        ...current,
+        {
+          key: SECRET_METADATA_ENCODING_KEY,
+          value: SECRET_METADATA_ENCODING_BASE64,
+          isEncrypted: false
+        }
+      ];
+    },
+    [b64.isDecoding, b64.isMarkedBase64, secretMetadata]
+  );
+
   // Serialize metadata for effect dependency since watch() returns same array ref for nested changes
   const serializedMetadata = JSON.stringify(watchedMetadata);
   const batchAutoApplyTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -578,7 +610,7 @@ export const SecretEditTableRow = ({
           newSecretName: effectiveKeyDirty ? (watchedKey as string) : undefined,
           secretComment: isCommentDirty ? (watchedComment as string) : undefined,
           tags: isTagsDirty ? watchedTags : undefined,
-          secretMetadata: isMetadataDirty ? watchedMetadata : undefined,
+          secretMetadata: getMetadataWithEncoding(isMetadataDirty ? watchedMetadata : undefined),
           originalValue: originalValueRef.current ?? undefined
         });
       }
@@ -636,12 +668,18 @@ export const SecretEditTableRow = ({
 
   const handleCopySharedToClipboard = async () => {
     try {
+      let textToCopy: string;
       if (isPendingCreate) {
-        await window.navigator.clipboard.writeText((watchedValue as string) ?? "");
+        textToCopy = (watchedValue as string) ?? "";
       } else {
         const { data } = await refetchSharedValue();
-        await window.navigator.clipboard.writeText(data?.value ?? "");
+        textToCopy = data?.value ?? "";
       }
+      if (b64.isDecoding) {
+        const decoded = safeBase64Decode(textToCopy);
+        if (decoded.ok) textToCopy = decoded.value;
+      }
+      await window.navigator.clipboard.writeText(textToCopy);
       setIsCopied(true);
       createNotification({ type: "success", text: "Copied secret to clipboard" });
     } catch (e) {
@@ -737,7 +775,8 @@ export const SecretEditTableRow = ({
           secretValueHidden,
           type: SecretType.Shared,
           secretId,
-          newSecretName: isKeyDirty ? key : undefined
+          newSecretName: isKeyDirty ? key : undefined,
+          secretMetadata: getMetadataWithEncoding()
         });
       }
     }
@@ -776,7 +815,8 @@ export const SecretEditTableRow = ({
       secretValueHidden,
       type: SecretType.Shared,
       secretId,
-      newSecretName: newKey
+      newSecretName: newKey,
+      secretMetadata: getMetadataWithEncoding()
     });
     if (!secretValueHidden) {
       originalValueRef.current = secretValue;
@@ -941,8 +981,13 @@ export const SecretEditTableRow = ({
                       ? HIDDEN_SECRET_VALUE
                       : isErrorFetchingSharedValue
                         ? "Error fetching secret value..."
-                        : (field.value as string)
+                        : b64.isDecoding && b64.displayValue !== undefined
+                          ? b64.displayValue
+                          : (field.value as string)
                 }
+                onChange={(val) => {
+                  field.onChange(b64.toStorageValue(val));
+                }}
                 key="secret-input-shared"
                 isVisible={isVisible || isResolvedValueOpen}
                 secretPath={secretPath}
@@ -972,6 +1017,13 @@ export const SecretEditTableRow = ({
                   </TooltipTrigger>
                   <TooltipContent>Has comment</TooltipContent>
                 </Tooltip>
+              )}
+              {b64.toggleState && !isImportedSecret && (
+                <Base64Toggle
+                  state={b64.toggleState}
+                  onClick={b64.handleToggle}
+                  warningMessage={b64.warningMessage}
+                />
               )}
               {canReadTags && tags?.length && !isImportedSecret ? (
                 <Tooltip>
