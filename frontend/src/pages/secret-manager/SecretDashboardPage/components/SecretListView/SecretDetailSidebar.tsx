@@ -481,16 +481,8 @@ export const SecretDetailSidebar = ({
                               ? b64.displayValue
                               : field.value
                           }
-                          onChange={(e) => {
-                            if (b64.isDecoding) {
-                              const newDecodedValue =
-                                typeof e === "string"
-                                  ? e
-                                  : (e as React.ChangeEvent<HTMLTextAreaElement>).target.value;
-                              field.onChange(b64.toStorageValue(newDecodedValue));
-                            } else {
-                              field.onChange(e);
-                            }
+                          onChange={(val) => {
+                            field.onChange(b64.toStorageValue(val));
                           }}
                           autoFocus={false}
                           onFocus={() => setIsFieldFocused.on()}
