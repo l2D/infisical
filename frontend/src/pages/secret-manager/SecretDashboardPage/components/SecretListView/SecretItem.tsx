@@ -153,12 +153,6 @@ export const SecretItem = memo(
     const isLoadingSecretValue = canFetchSecretValue && isPendingSecretValueData;
     const hasFetchedSecretValue = !canFetchSecretValue || Boolean(secretValueData);
 
-    const b64 = useBase64Toggle({
-      rawValue: originalSecret.value ?? secretValueData?.value,
-      secretMetadata: originalSecret.secretMetadata,
-      isVisible: Boolean(isVisible) || isFieldFocused
-    });
-
     const secret = {
       ...originalSecret,
       value: originalSecret.value ?? secretValueData?.value,
@@ -218,6 +212,7 @@ export const SecretItem = memo(
       register,
       watch,
       setValue,
+      getValues,
       reset,
       trigger,
       formState: { isDirty, isSubmitting, errors },
@@ -255,6 +250,47 @@ export const SecretItem = memo(
     const isOverridden =
       overrideAction === SecretActionType.Created || overrideAction === SecretActionType.Modified;
     const hasTagsApplied = Boolean(fields.length);
+
+    const handleBase64MarkChange = useCallback(
+      (shouldBeMarked: boolean) => {
+        const current =
+          (getValues("secretMetadata") as
+            | { key: string; value: string; isEncrypted?: boolean }[]
+            | undefined) ?? [];
+        if (shouldBeMarked) {
+          if (!hasBase64Encoding(current)) {
+            setValue(
+              "secretMetadata",
+              [
+                ...current,
+                {
+                  key: SECRET_METADATA_ENCODING_KEY,
+                  value: SECRET_METADATA_ENCODING_BASE64,
+                  isEncrypted: false
+                }
+              ],
+              { shouldDirty: true }
+            );
+          }
+          return;
+        }
+        const filtered = current.filter(
+          (m) =>
+            !(m.key === SECRET_METADATA_ENCODING_KEY && m.value === SECRET_METADATA_ENCODING_BASE64)
+        );
+        if (filtered.length !== current.length) {
+          setValue("secretMetadata", filtered, { shouldDirty: true });
+        }
+      },
+      [getValues, setValue]
+    );
+
+    const b64 = useBase64Toggle({
+      rawValue: originalSecret.value ?? secretValueData?.value,
+      secretMetadata: originalSecret.secretMetadata,
+      isVisible: Boolean(isVisible) || isFieldFocused,
+      onMarkChange: handleBase64MarkChange
+    });
 
     const buildModifiedSecret = useCallback(
       (data: TFormSchema) => {

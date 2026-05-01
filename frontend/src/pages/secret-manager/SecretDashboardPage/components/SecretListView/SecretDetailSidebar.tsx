@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { subject } from "@casl/ability";
 import { faCircleQuestion } from "@fortawesome/free-regular-svg-icons";
@@ -142,12 +142,6 @@ export const SecretDetailSidebar = ({
     valueOverride: originalSecret?.valueOverride ?? secretValueData?.valueOverride
   };
 
-  const b64 = useBase64Toggle({
-    rawValue: secret.value,
-    secretMetadata: secret.secretMetadata,
-    isVisible: isFieldFocused
-  });
-
   const { permission } = useProjectPermission();
 
   const canEditSecretValue = permission.can(
@@ -247,6 +241,39 @@ export const SecretDetailSidebar = ({
   const metadataFormFields = useFieldArray({
     control,
     name: "secretMetadata"
+  });
+
+  const handleBase64MarkChange = useCallback(
+    (shouldBeMarked: boolean) => {
+      const current =
+        (getValues("secretMetadata") as
+          | { key: string; value: string; isEncrypted?: boolean }[]
+          | undefined) ?? [];
+      const existingIndex = current.findIndex(
+        (m) => m.key === SECRET_METADATA_ENCODING_KEY && m.value === SECRET_METADATA_ENCODING_BASE64
+      );
+      if (shouldBeMarked) {
+        if (existingIndex === -1) {
+          metadataFormFields.append({
+            key: SECRET_METADATA_ENCODING_KEY,
+            value: SECRET_METADATA_ENCODING_BASE64,
+            isEncrypted: false
+          });
+        }
+        return;
+      }
+      if (existingIndex !== -1) {
+        metadataFormFields.remove(existingIndex);
+      }
+    },
+    [getValues, metadataFormFields]
+  );
+
+  const b64 = useBase64Toggle({
+    rawValue: secret.value,
+    secretMetadata: secret.secretMetadata,
+    isVisible: isFieldFocused,
+    onMarkChange: handleBase64MarkChange
   });
 
   const secretKey = secret?.key || "";

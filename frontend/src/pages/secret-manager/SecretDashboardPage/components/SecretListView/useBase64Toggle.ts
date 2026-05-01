@@ -7,6 +7,9 @@ type UseBase64ToggleParams = {
   rawValue: string | undefined;
   secretMetadata?: { key: string; value: string; isEncrypted?: boolean }[];
   isVisible: boolean;
+  // Called only for auto-detected (unsaved) values when the toggle state changes.
+  // Lets callers stage the encoding=base64 metadata into their form so saving persists it.
+  onMarkChange?: (shouldBeMarked: boolean) => void;
 };
 
 type UseBase64ToggleReturn = {
@@ -23,7 +26,8 @@ type UseBase64ToggleReturn = {
 export const useBase64Toggle = ({
   rawValue,
   secretMetadata,
-  isVisible
+  isVisible,
+  onMarkChange
 }: UseBase64ToggleParams): UseBase64ToggleReturn => {
   const isMarkedBase64 = useMemo(() => hasBase64Encoding(secretMetadata), [secretMetadata]);
   const [isDecoding, setIsDecoding] = useState(isMarkedBase64);
@@ -82,12 +86,21 @@ export const useBase64Toggle = ({
     return null;
   }, [isVisible, rawValue, isMarkedBase64, isDecoding, isAutoDetected, decodeResult]);
 
-  // Allow toggling both ways for both marked and auto-detected values.
+  // For saved-marked values: just toggles the decode view.
+  // For auto-detected values: also notifies the consumer so they can stage
+  // (or unstage) the encoding=base64 metadata in their form, so the next save
+  // persists the user's intent.
   const handleToggle = useCallback(() => {
-    if (isMarkedBase64 || isAutoDetected) {
+    if (isMarkedBase64) {
       setIsDecoding((prev) => !prev);
+      return;
     }
-  }, [isMarkedBase64, isAutoDetected]);
+    if (isAutoDetected) {
+      const next = !isDecoding;
+      setIsDecoding(next);
+      onMarkChange?.(next);
+    }
+  }, [isMarkedBase64, isAutoDetected, isDecoding, onMarkChange]);
 
   // Unconditionally enable decoding (avoids race with useEffect on isMarkedBase64).
   const enableDecoding = useCallback(() => setIsDecoding(true), []);

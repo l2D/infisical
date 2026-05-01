@@ -389,10 +389,103 @@ export const SecretEditTableRow = ({
     | { key: string; value: string; isEncrypted: boolean }[]
     | undefined;
 
+  const handleBase64MarkChange = useCallback(
+    async (shouldBeMarked: boolean) => {
+      // In multi-env Overview rows the form's "metadata" field is uninitialized,
+      // so we compute next-state from the saved-secret prop (the source of truth).
+      const current = secretMetadata ?? [];
+      let newMetadata: { key: string; value: string; isEncrypted?: boolean }[];
+      if (shouldBeMarked) {
+        if (hasBase64Encoding(current)) return;
+        newMetadata = [
+          ...current,
+          {
+            key: SECRET_METADATA_ENCODING_KEY,
+            value: SECRET_METADATA_ENCODING_BASE64,
+            isEncrypted: false
+          }
+        ];
+      } else {
+        newMetadata = current.filter(
+          (m) =>
+            !(
+              m.key === SECRET_METADATA_ENCODING_KEY &&
+              m.value === SECRET_METADATA_ENCODING_BASE64
+            )
+        );
+        if (newMetadata.length === current.length) return;
+      }
+
+      if (isBatchMode) {
+        // Batch mode flows through the form's auto-apply useEffect.
+        setValue(
+          "metadata",
+          newMetadata.map((m) => ({
+            key: m.key,
+            value: m.value,
+            isEncrypted: m.isEncrypted ?? false
+          })),
+          { shouldDirty: true }
+        );
+        return;
+      }
+
+      // Non-batch mode: persist directly via the mutation. The parent
+      // handleSecretUpdate drops secretMetadata in non-batch mode (designed for
+      // value-only edits), so we bypass it and call updateSecretV3 ourselves.
+      if (isImportedSecret || isCreatable || isPendingCreate || isPendingDelete || !secretId) {
+        return;
+      }
+      try {
+        const result = await updateSecretV3({
+          environment,
+          projectId: currentProject.id,
+          secretPath,
+          secretKey: secretName,
+          type: SecretType.Shared,
+          secretMetadata: newMetadata
+        });
+        if ("approval" in result) {
+          createNotification({
+            type: "info",
+            text: "Requested change has been sent for review"
+          });
+        } else {
+          createNotification({
+            type: "success",
+            text: shouldBeMarked ? "Marked as base64" : "Removed base64 mark"
+          });
+        }
+      } catch (error) {
+        console.error(error);
+        createNotification({
+          type: "error",
+          text: "Failed to update base64 metadata"
+        });
+      }
+    },
+    [
+      secretMetadata,
+      isBatchMode,
+      setValue,
+      isImportedSecret,
+      isCreatable,
+      isPendingCreate,
+      isPendingDelete,
+      secretId,
+      updateSecretV3,
+      currentProject.id,
+      environment,
+      secretPath,
+      secretName
+    ]
+  );
+
   const b64 = useBase64Toggle({
     rawValue: (watchedValue as string) ?? undefined,
     secretMetadata,
-    isVisible: Boolean(isVisible) || isFieldActive
+    isVisible: Boolean(isVisible) || isFieldActive,
+    onMarkChange: handleBase64MarkChange
   });
 
   const getMetadataWithEncoding = useCallback(
@@ -1018,13 +1111,6 @@ export const SecretEditTableRow = ({
                   <TooltipContent>Has comment</TooltipContent>
                 </Tooltip>
               )}
-              {b64.toggleState && !isImportedSecret && (
-                <Base64Toggle
-                  state={b64.toggleState}
-                  onClick={b64.handleToggle}
-                  warningMessage={b64.warningMessage}
-                />
-              )}
               {canReadTags && tags?.length && !isImportedSecret ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1162,6 +1248,13 @@ export const SecretEditTableRow = ({
             isSingleEnvView ? "top-0.5 right-0.5" : "-top-[1px] -right-1.5"
           )}
         >
+          {b64.toggleState && !isImportedSecret && (
+            <Base64Toggle
+              state={b64.toggleState}
+              onClick={b64.handleToggle}
+              warningMessage={b64.warningMessage}
+            />
+          )}
           <Tooltip disableHoverableContent>
             <TooltipTrigger>
               <IconButton

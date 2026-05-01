@@ -27,7 +27,7 @@ export const Base64Toggle = ({ state, onClick, isDisabled, warningMessage }: Pro
       case Base64ToggleState.Inactive:
         return "Showing raw base64. Click to decode.";
       case Base64ToggleState.Suggested:
-        return "This value looks like base64. Click to decode.";
+        return "This value looks like base64. Click to decode and mark.";
       default:
         return "";
     }
